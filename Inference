@@ -1,0 +1,125 @@
+
+# **SECTION 1: Install Dependencies**
+!pip install -U pyarrow==16.1.0 protobuf==4.25.3 datasets==2.21.0 evaluate==0.4.3 librosa soundfile jiwer --no-cache-dir --quiet
+# **SECTION 2: Import Modules**
+import os
+import time
+import sys
+import pandas as pd
+import torch
+
+from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
+import numpy as np
+import librosa
+import torch
+import os
+# **SECTION 3: Define paths and hyperparameters**
+DATA_DIR = "/kaggle/input/shobdotori/Test"         
+MODEL_ID = "utpal07/wav2vec2-bangla-finetuned-xlarge"  
+OUTPUT_DIR = "/kaggle/working/"
+OUTPUT_FILE = "NeuralSight_predictions_hidden.csv"
+BATCH_SIZE = 1                        
+USE_CPU = False                      
+# **SECTION 4: Initialize Timing**
+print("Python:", sys.version.splitlines()[0])
+start_time = time.time()
+print("Inference started at:", time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(start_time)))
+
+# **SECTION 5: Load Model and Processor**
+print("Loading model from Hugging Face:", MODEL_ID)
+processor = Wav2Vec2Processor.from_pretrained(MODEL_ID)
+model = Wav2Vec2ForCTC.from_pretrained(MODEL_ID)
+
+device = "cuda" if (torch.cuda.is_available() and not USE_CPU) else "cpu"
+model.to(device)
+model.eval()
+print("Loaded. Device:", device)
+# **SECTION 6: List Test Files**
+audio_exts = [".wav", ".flac", ".mp3"]
+test_files = sorted([f for f in os.listdir(DATA_DIR) if os.path.splitext(f)[1].lower() in audio_exts])
+
+print("DATA_DIR:", DATA_DIR)
+print("Found", len(test_files), "audio files (first 20):")
+print(test_files[:20])
+
+# **SECTION 6: Inference Loop**
+
+MIN_SAMPLES = 32000   
+
+predictions = []
+total = len(test_files)
+
+for idx, fname in enumerate(test_files):
+    fpath = os.path.join(DATA_DIR, fname)
+
+
+    try:
+        try:
+            audio, sr = sf.read(fpath)
+        except:
+            audio, sr = librosa.load(fpath, sr=None)
+    except Exception as e:
+        print(f"[{idx+1}/{total}] Could NOT load {fname}: {e}")
+        predictions.append({"audio": fname, "text": ""})
+        continue
+
+    try:
+        audio = np.array(audio, dtype=np.float32)
+    except:
+        audio = np.array([0.0], dtype=np.float32)
+
+    # Handle stereo → mono
+    if len(audio.shape) > 1:
+        audio = np.mean(audio, axis=1)
+
+    # Handle NaN / Inf
+    if np.isnan(audio).any() or np.isinf(audio).any():
+        audio = np.zeros(MIN_SAMPLES, dtype=np.float32)
+
+    target_sr = processor.feature_extractor.sampling_rate
+    if sr != target_sr:
+        try:
+            audio = librosa.resample(audio, orig_sr=sr, target_sr=target_sr)
+        except:
+            audio = np.zeros(MIN_SAMPLES, dtype=np.float32)
+        sr = target_sr
+
+
+    if len(audio) < MIN_SAMPLES:
+        pad_len = MIN_SAMPLES - len(audio)
+        audio = np.pad(audio, (0, pad_len), mode="constant")
+
+
+    try:
+        inputs = processor(audio, sampling_rate=sr, return_tensors="pt", padding=True)
+        input_values = inputs.input_values.to(device)
+
+        with torch.no_grad():
+            logits = model(input_values).logits
+
+        pred_ids = torch.argmax(logits, dim=-1)
+        transcription = processor.batch_decode(pred_ids)[0]
+
+    except Exception as e:
+        print(f"[{idx+1}/{total}] FAILED: {fname}, reason: {e}")
+        transcription = ""
+
+    predictions.append({"audio": fname, "text": transcription})
+
+    print(f"[{idx+1}/{total}] {fname} → {transcription[:80]}")
+
+# **SECTION 7: Save Predictions to CSV**
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+df = pd.DataFrame(predictions, columns=["audio", "text"])
+csv_path = os.path.join(OUTPUT_DIR, OUTPUT_FILE)
+df.to_csv(csv_path, index=False)
+print("Saved CSV to:", csv_path)
+print("Rows:", len(df))
+
+# **SECTION 8: Print Execution Summary**
+end_time = time.time()
+total_time = end_time - start_time
+print(f"Total Execution Time: {total_time:.2f} seconds")
+print(f"Output file '{OUTPUT_FILE}' generated successfully!")
+
+
