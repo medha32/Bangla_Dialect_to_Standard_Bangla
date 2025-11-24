@@ -84,6 +84,8 @@ Run inference pipeline for validation
 | “আমরা গইলাম বাজারে।”           | “আমরা বাজারে গেলাম।”      |
 
 
+HuggingFace model: utpal07/wav2vec2-bangla-finetuned-xlarge
+
 
 Members:
 Utpal Barua
